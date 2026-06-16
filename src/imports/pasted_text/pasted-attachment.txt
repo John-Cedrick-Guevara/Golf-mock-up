@@ -1,0 +1,617 @@
+Build a full-stack golf tee time reservation system called "Pradera Verde Golf and Country Club" using Next.js (App Router), TypeScript, Tailwind CSS, and Convex as the backend. This is an MVP with mock payment only — no real payment gateway. Use Clerk for authentication.
+
+---
+
+## DESIGN SYSTEM — Apply to Every Page
+
+### Color Tokens
+- Primary green: #2D5016
+- Accent gold: #C9A84C
+- Background primary: #FFFFFF
+- Background secondary: #F8F7F4
+- Text primary: #1A1A18
+- Text secondary: #6B6B67
+- Border default: #E5E3DF
+- Status — approved: #2D5016 (green)
+- Status — pending: #B07D1A (amber)
+- Status — rejected: #A32D2D (red)
+- Status — cancelled: #6B6B67 (gray)
+- Status — completed: #185FA5 (blue)
+
+### Typography
+- Display/headings: Georgia serif, normal weight, tight tracking
+- Body: Inter or system-ui, 15–16px, line-height 1.65
+- UI labels/eyebrows: 12–13px, uppercase, letter-spacing 0.08em, weight 500, color #6B6B67
+
+### Component Rules
+- Buttons: two variants only
+  - Primary: bg #2D5016, white text, no border-radius above 6px, no shadow
+  - Ghost: transparent bg, 1px solid #2D5016 border, #2D5016 text
+- Inputs: 1px solid #E5E3DF border, 44px height, 14px label above (never inside/floating), 8px border-radius
+- Cards: white bg, 1px solid #E5E3DF border, 12px border-radius, no drop shadow
+- No icon-heavy card grids. No pill badge clusters. No decorative gradients or shadows.
+- Section vertical padding: 80px desktop, 48px mobile
+- All dividers: 1px solid #E5E3DF
+- Loading states: simple text spinner or "Loading…" — no skeleton shimmer effects
+- Error/success: inline message below the relevant field or action — no browser alert() calls
+
+---
+
+## DATA MODELS (Convex)
+
+### users
+- clerkId: string
+- name: string
+- email: string
+- phone?: string
+- role: "golfer" | "admin"
+- createdAt: number
+
+### courses
+- name: string
+- location: string
+- address: string
+- mapUrl: string
+- teeInfo: string
+- notes: string
+
+### teeTimeSlots
+- courseId: Id<"courses">
+- date: string (YYYY-MM-DD)
+- startTime: string (HH:MM)
+- capacity: number
+- availableSpots: number
+- status: "available" | "disabled" | "blocked"
+- blockReason?: string
+- notes?: string
+
+### reservations
+- userId: Id<"users">
+- courseId: Id<"courses">
+- teeTimeSlotId: Id<"teeTimeSlots">
+- preferredDate: string
+- preferredTime: string
+- alternateTime?: string
+- playerNames: string[]
+- transportationNeeded: boolean
+- cityFrom: string
+- customerNotes?: string
+- adminNotes?: string
+- customerFacingNote?: string
+- status: "pending" | "approved" | "rejected" | "cancelled" | "completed"
+- paymentState: "not_required" | "unpaid" | "deposit_paid_mock" | "paid_mock" | "refunded_mock"
+- createdAt: number
+- updatedAt: number
+
+### scheduleBlocks
+- courseId: Id<"courses">
+- startDate: string
+- endDate: string
+- startTime?: string
+- endTime?: string
+- reason: "tournament" | "maintenance" | "private_event" | "holiday" | "other"
+- notes?: string
+- createdBy: Id<"users">
+
+### notifications
+- userId: Id<"users">
+- reservationId: Id<"reservations">
+- event: "submitted" | "approved" | "rejected" | "cancelled" | "payment_confirmed"
+- channel: "email" | "sms" | "in_app"
+- status: "queued" | "sent_mock" | "failed"
+- createdAt: number
+
+---
+
+## SEED DATA
+
+On first load, seed Convex with:
+
+### Course
+Name: Pradera Verde Golf and Country Club
+Location: Cavite, Philippines
+Address: Pradera Verde, General Trias, Cavite
+MapUrl: https://maps.google.com/?q=Pradera+Verde+Golf+Country+Club
+TeeInfo: 18 holes, Blue Tees — 6,156 total yards. Championship layout with water hazards, elevated greens, and firm putting surfaces.
+
+### Tee Time Slots
+Generate 6 slots per day for the next 21 days:
+Times: 06:00, 07:00, 08:00, 10:00, 13:00, 15:00
+Capacity: 4 players each
+Mix: ~70% available, ~15% blocked (reason: "Tournament"), ~15% disabled
+Block the following specifically:
+- All slots on Day 7 from today: reason "Monthly club tournament"
+- 06:00 and 07:00 slots on Day 14: reason "Maintenance — greens aerification"
+
+### Admin User
+Seed one admin user record linked to a known Clerk test account or leave role assignment to a Convex mutation `setAdminRole(clerkId)` that can be called manually.
+
+---
+
+## FILE STRUCTURE
+
+src/
+  app/
+    (public)/
+      page.tsx                          # Landing page
+      booking/page.tsx                  # Booking flow
+      my-reservations/page.tsx          # Golfer reservation list
+      my-reservations/[id]/page.tsx     # Golfer reservation detail
+      payment/[id]/page.tsx             # Mock payment
+    (auth)/
+      sign-in/page.tsx
+      sign-up/page.tsx
+    admin/
+      layout.tsx                        # Sidebar layout wrapper
+      page.tsx                          # Dashboard
+      reservations/page.tsx
+      reservations/[id]/page.tsx
+      calendar/page.tsx
+      blocks/page.tsx
+      notifications/page.tsx
+  components/
+    layout/
+      Navbar.tsx
+      AdminSidebar.tsx
+    booking/
+      DatePicker.tsx
+      TeeTimeGrid.tsx
+      ReservationForm.tsx
+      ConfirmationPanel.tsx
+    admin/
+      ReservationTable.tsx
+      StatusBadge.tsx
+      PaymentStateTag.tsx
+      ActionPanel.tsx
+      CalendarView.tsx
+      BlockForm.tsx
+      NotificationLog.tsx
+    shared/
+      StatusTimeline.tsx
+      MockPaymentBanner.tsx
+  convex/
+    schema.ts
+    users.ts
+    courses.ts
+    teeTimeSlots.ts
+    reservations.ts
+    scheduleBlocks.ts
+    notifications.ts
+    seed.ts
+
+---
+
+## PAGE 1 — Landing Page (/)
+
+### Navbar (shared across all public pages)
+- Left: "Pradera Verde" in serif, 16px, #1A1A18
+- Center links: Home | Book a Tee Time | My Reservations (hidden if not signed in)
+- Right: Sign In button (ghost) or user avatar + dropdown (if signed in)
+- Mobile: hamburger collapse
+- Active route: 2px gold underline on link, no background highlight
+
+### Hero Section
+- Full-viewport-height section
+- Background: dark overlay (#1A1A18 at 60%) over a golf course image (use Unsplash source URL: https://images.unsplash.com/photo-1587174145116-8c48490c54a6?w=1600)
+- Centered content over image:
+  - Eyebrow: "Cavite, Philippines" — 12px uppercase gold #C9A84C letter-spacing 0.12em
+  - Headline (serif, 52px desktop / 36px mobile, white): "Pradera Verde Golf and Country Club"
+  - Sub (16px, white at 80% opacity): "18 holes of championship golf in the rolling greens of Cavite."
+  - CTA button (primary, large): "Book a Tee Time →" — links to /booking
+- No carousel. No overlapping images.
+
+### Course Overview Section
+Background: #F8F7F4, 80px vertical padding
+Two-column layout (50/50), stacked on mobile:
+
+Left column:
+- Eyebrow: "The Course"
+- Heading (serif, 32px): "18 Holes — Blue Tees"
+- Body: "Pradera Verde presents a challenging 18-hole layout carved through the rolling terrain of Cavite. Water hazards, well-guarded greens, and firm putting surfaces demand both precision and course management. Total yardage from the blue tees: 6,156 yards."
+- Stat row (inline, divider-separated, no card borders):
+  Front 9: 2,998 yds   |   Back 9: 3,158 yds   |   Par: 72
+
+Right column:
+- Clean HTML table, no outer card, thin 1px #E5E3DF borders, alternating #F8F7F4/#FFFFFF rows
+- Columns: Hole | Yards | Handicap
+- Front 9 rows then a subtle mid-table divider labeled "Back 9" then Back 9 rows
+
+Data — Front 9 (Blue Tees):
+Hole 1 | 349 | H11
+Hole 2 | 170 | H17
+Hole 3 | 554 | H1
+Hole 4 | 418 | H5
+Hole 5 | 405 | H9
+Hole 6 | 446 | H3
+Hole 7 | 372 | H13
+Hole 8 | 148 | H15
+Hole 9 | 536 | H7
+
+Data — Back 9 (Blue Tees):
+Hole 10 | 338 | H12
+Hole 11 | 174 | H18
+Hole 12 | 486 | H14
+Hole 13 | 376 | H2
+Hole 14 | 398 | H6
+Hole 15 | 161 | H16
+Hole 16 | 383 | H4
+Hole 17 | 295 | H10
+Hole 18 | 547 | H8
+
+### Walkthrough Section
+Background: #FFFFFF, 80px vertical padding
+- Eyebrow: "Caddie Notes"
+- Heading (serif, 32px): "Playing Pradera Verde"
+- Subtext (muted, 14px): "Course walkthrough by Jerboa Go. All yardages from blue tees."
+- Two-column layout: Front 9 left, Back 9 right
+- Each hole block: hole label in 12px uppercase gold + hole number, then 1–2 sentence tip below in 14px body text, 1px #E5E3DF bottom border between holes
+
+Hole content (use verbatim, condensed):
+H1 (349 yds): Safe drive at 230y. Aim left of center on approach — sets up an uphill putt.
+H2 (170 yds): 180y to the middle of the green. Left center avoids bunkers and leaves an uphill putt.
+H3 (554 yds): Keep water completely out of play. Hit 200y off the tee, then lay up carefully — water extends far left on the second shot.
+H4 (418 yds): Drive to 260y max. Avoid going over the green — front pin position leaves an easier up-and-down.
+H5 (405 yds): Uphill tee box — play 200y straight to leave 130–140y on the approach.
+H6 (446 yds): Drive 230y max. Aim left center on approach — water right, two bunkers guard the green.
+H7 (372 yds): Trust the yardage. Aim right of the bunker off the tee. Right side of the green gives the better putt.
+H8 (148 yds): Avoid the right side at all costs.
+H9 (536 yds): Lay up 160–170y for ~150y in. Aim right — trouble on the left, severe uphill on the front left of the green.
+H10 (338 yds): Aim past the left bunker off the tee. Right side of the green leaves an uphill putt.
+H11 (174 yds): Play short if unsure — bunkers guard the green. Front left gives an uphill putt.
+H12 (486 yds): Straightforward par 5. Never go over the green — not even slightly.
+H13 (376 yds): Drive 220y max. Avoid the left side of the green — downhill putt is difficult from there.
+H14 (398 yds): At 220y off the tee, ~140–150y remains. Aim at the front of the green — back putts are harder.
+H15 (161 yds): Aim slightly left — a big bunker guards the right.
+H16 (383 yds): Long hitters carry 230–250y past the left bunker. Creek is in play on the right.
+H17 (295 yds): Short hole, well-guarded greens. Play conservative for a manageable par or bogey.
+H18 (547 yds): Island green — play the middle. Going over means a very difficult recovery with bunkers and water surrounding.
+
+### Practical Info Section
+Background: #F8F7F4, 80px vertical padding
+Three-column layout (stacked mobile), plain text — no cards, no icons:
+Column 1 — Getting There
+Pradera Verde Golf and Country Club
+General Trias, Cavite, Philippines
+[View on Google Maps →]
+
+Column 2 — Fees & Requirements
+Green fee includes caddie service.
+Caddie fee: PHP 500–600.
+Visitors must carry a valid passport.
+Lost passport fee: PHP 3,000.
+
+Column 3 — On the Course
+Bring your own water and snacks — tee house food is limited.
+Use an umbrella — open course, all weather.
+Greens are firm: always carry the middle.
+Sand is wet and heavy — add yardage and dig in slightly deeper.
+
+### Final CTA Section
+Background: #FFFFFF, 80px vertical padding, centered
+- Heading (serif, 36px): "Ready to play Pradera Verde?"
+- Body: "Check available tee times and submit your reservation online. The course team reviews and confirms within 24 hours."
+- Button (primary, large): "Book a Tee Time →" links to /booking
+
+---
+
+## PAGE 2 — Auth Pages (/sign-in and /sign-up)
+
+Use Clerk's <SignIn /> and <SignUp /> components but wrap them in a custom two-column layout:
+
+Left column (55% desktop, 100% mobile):
+- Centered vertically with padding
+- Top: "Pradera Verde" in serif 20px, link to /
+- Below: Clerk auth component, appearance customized to match design tokens:
+  - Font: inherit
+  - Colors: primary action #2D5016, border #E5E3DF, text #1A1A18
+  - Border-radius: 8px
+- Below the Clerk component (sign-in page only): small muted text — "Admin access is managed by the course team."
+
+Right column (45% desktop, hidden mobile):
+- Full-height background image (same Unsplash URL as hero, or a green/hole shot)
+- Dark overlay #1A1A18 at 50%
+- Centered serif pull quote (white):
+  "The greens here are firm. Carry the middle and you'll be fine."
+  — Course walkthrough, Pradera Verde
+
+---
+
+## PAGE 3 — Booking Page (/booking)
+
+### Step 1 — Date and Slot Selection
+- Page heading (serif, 28px): "Book a Tee Time"
+- Sub: "Select a date to see available slots at Pradera Verde."
+
+Date selector:
+- Clean horizontal date strip showing next 14 days (day name + date number). Selected date highlighted with #2D5016 bg and white text. Scrollable on mobile.
+
+Slot grid (shown after date selection):
+- Not a card grid — render as a clean table or stacked list
+- Each row: Time | Course | Spots Available | Status | Select button
+- Available slots: normal text, 2px left border #2D5016
+- Blocked slots: muted text, "Blocked — [reason]", not selectable, no button
+- Disabled slots: strikethrough text, muted, not selectable
+- If no available slots on selected date: empty state text — "No tee times available on this date. Try another day."
+
+### Step 2 — Reservation Form (shown after slot selected, same page)
+Form heading: "Your details"
+Grouped sections:
+
+Contact Information
+- Full name (required)
+- Email address (required)
+- Phone number (required)
+- Visiting from (city, required)
+
+Date and Time
+- Preferred date (auto-filled from Step 1, read-only display)
+- Preferred tee time (auto-filled from selected slot, read-only display)
+- Alternate tee time (optional dropdown of other available slots that day)
+
+Players (1–4)
+- Player 1 name (required)
+- "+ Add another player" text link that appends Player 2–4 fields
+- Each additional player has a small "Remove" text link
+
+Preferences
+- Course: pre-filled "Pradera Verde Golf and Country Club" (read-only for MVP)
+- Transportation needed: Yes / No radio buttons
+- Other notes: textarea, optional
+
+Submit button: full-width primary — "Submit reservation request"
+
+### Step 3 — Confirmation Panel (replaces form after submit)
+Clean panel, no modal:
+- Heading (serif): "Reservation submitted"
+- Body: "Your tee time request for [date] at [time] has been received. The course team will review and confirm within 24 hours."
+- Reservation ID: shown as a small monospaced string
+- Status badge: "Pending" in amber
+- Two links: "View my reservations →" and "Book another tee time"
+
+Validation:
+- Highlight missing required fields with red 1px border + inline error message below the field
+- No submit if any required field is empty
+
+---
+
+## PAGE 4 — My Reservations (/my-reservations)
+
+Requires Clerk auth. Redirect to /sign-in if not authenticated.
+
+- Page heading (serif): "My Reservations"
+- Two tabs: Upcoming | Past
+- Reservation list (table on desktop, stacked cards on mobile):
+  Columns: Date | Time | Course | Players | Status | Payment | Actions
+- Status shown as small colored text badge (no pill background — just colored text + dot)
+- Actions column: "View details" text link
+- Empty state: "You have no upcoming reservations. Book a tee time to get started."
+
+---
+
+## PAGE 5 — Golfer Reservation Detail (/my-reservations/[id])
+
+- Back link: "← My reservations"
+- Page heading: Date + time of the reservation in serif
+
+Status Timeline (horizontal, top of page):
+Four steps: Submitted → Under Review → Confirmed → Completed (or Rejected / Cancelled as terminal states)
+Current step: filled #2D5016 dot + label. Past steps: filled gray. Future steps: empty ring.
+If rejected or cancelled: show as a red terminal state.
+
+Reservation details section:
+Two columns (desktop):
+Left: Course, date, time, alternate time, players list, transport, city from, golfer notes
+Right: Status badge, payment state tag, admin customer-facing note (if any) in a tinted #F8F7F4 box with 2px left border #C9A84C
+
+Action row below details:
+- If status = approved and paymentState = unpaid: ghost button "Complete mock payment →" links to /payment/[id]
+- If status = pending or approved: plain text link in muted red "Cancel reservation" — triggers a confirmation dialog before calling the cancel mutation
+
+---
+
+## PAGE 6 — Mock Payment Page (/payment/[id])
+
+Top banner:
+- Background #FFF8E7, 1px solid #C9A84C border, 12px border-radius
+- Text: "Simulation only — no real money will be charged. This is a mock payment flow for demonstration purposes."
+
+Reservation summary (below banner):
+- Course, date, time, players, amount label (e.g. "Reservation deposit: PHP 1,500 — MOCK")
+
+Payment method (radio group, 3 options):
+1. Online Banking
+   Sub: "Transfer via BDO, BPI, or UnionBank. Mock reference number provided."
+   On select: show block — "Mock account: BDO 1234-5678-9012 | Reference: MOCK-[reservationId]"
+
+2. Mobile Banking / GCash
+   Sub: "Pay via GCash or Maya. Mock QR shown."
+   On select: show a gray placeholder box (200x200) labeled "Mock QR Code — not functional"
+
+3. Cash on Site
+   Sub: "Pay at the pro shop on your day of play."
+   On select: show — "Please present your reservation ID at the clubhouse: [reservationId]"
+
+Confirm button: primary full-width — "Confirm mock payment"
+On click: loading → success state showing updated payment badge and message "Payment recorded (mock). Your reservation is confirmed."
+
+---
+
+## ADMIN SECTION
+
+### Admin Layout (/admin/layout.tsx)
+
+Left sidebar (240px fixed, dark):
+- Background: #1A1A18
+- Top: "Pradera Verde" serif 15px white + "Admin Panel" in 11px gold uppercase below
+- Nav items (14px white, 40px height, 16px horizontal padding):
+  - Dashboard
+  - Reservations
+  - Calendar
+  - Schedule Blocks
+  - Notifications
+  - [divider]
+  - Back to site →
+- Active item: 3px left border #C9A84C, background #2C2C2A
+- Hover: background #2C2C2A
+- No tooltip overlays
+
+Main content area:
+- Left margin 240px
+- Background #F8F7F4
+- Inner content max-width 1200px, padding 32px
+
+Role protection: check Convex user.role === "admin". If not, redirect to /.
+
+### Admin — Dashboard (/admin)
+
+Page heading: "Dashboard"
+Sub: Today's date
+
+Metric row (4 across, no card borders):
+- Pending today
+- Approved this week
+- Active tee time slots
+- Upcoming schedule blocks
+Each: 13px muted label above, 28px number below, subtle 1px bottom border separator
+
+Recent reservations table below metrics:
+Columns: Reservation ID | Golfer | Date | Time | Players | Status | Payment | Quick actions
+Quick actions: "Approve" and "Reject" as inline text links (green / red). Only shown for pending rows.
+Above table: filter row — Status dropdown, Date input, Search by name input
+
+### Admin — Reservations (/admin/reservations)
+
+Full table with all reservations.
+Status filter tabs above: All | Pending | Approved | Rejected | Cancelled | Completed
+Columns: ID | Golfer name | Date | Time | Players | Status | Payment | Updated | Actions
+Actions column: "View" text link
+Pagination below table (10 per page)
+Export placeholder button (disabled, labeled "Export CSV — coming soon")
+
+### Admin — Reservation Detail (/admin/reservations/[id])
+
+Two-column layout:
+
+Left column (60%): Full reservation info
+- Golfer: name, email, phone, city from
+- Reservation: course, date, preferred time, alternate time
+- Players: numbered list of player names
+- Transportation: yes/no
+- Customer notes (read-only)
+- Timestamp: created / last updated
+
+Right column (40%): Action Panel (card, white bg, 1px border)
+- Current status badge at top
+- Action buttons stacked vertically (only show relevant ones):
+  - Approve: primary green button (shows if pending)
+  - Reject: outline red button (shows if pending)
+  - Mark Completed: outline gray button (shows if approved)
+  - Cancel: outline gray button (shows if pending or approved)
+- Each action: confirm before executing (inline confirm/cancel row, not a modal)
+- Internal notes textarea: label "Internal note (admin only)" — saved to adminNotes
+- Customer note textarea: label "Note to golfer" — saved to customerFacingNote, visible in golfer detail view
+- Save notes button: ghost style
+- Notification log below notes (read-only): list of events — "Submitted — [timestamp]", "Approved — [timestamp]", etc.
+
+### Admin — Calendar (/admin/calendar)
+
+Page heading: "Tee Time Calendar"
+
+Monthly calendar grid:
+- Day cells show tee time slot chips (small, time label only)
+- Chip color: green = available, amber = partial, red = blocked/disabled
+- Click day cell: slide-in right panel showing all slots for that day
+  - Each slot: time, available spots, status, edit button, disable toggle
+  - "+ Add slot" button at bottom of panel
+
+Above calendar: two action buttons — "Add tee time slot" and "Add schedule block" — both open inline forms below the calendar header (not modals)
+
+Add slot form fields: Date, Start time, Capacity, Course (pre-filled), Notes, Submit
+Add block form: handled on /admin/blocks
+
+### Admin — Schedule Blocks (/admin/blocks)
+
+Page heading: "Schedule Blocks"
+Sub: "Block dates or time ranges for tournaments, maintenance, or private events. Blocked periods are hidden from golfer booking."
+
+Active blocks table:
+Columns: Date range | Time range | Reason | Notes | Course | Created by | Actions (Edit | Delete)
+Empty state: "No schedule blocks. Add one to restrict golfer booking for specific dates."
+
+Add new block form (below table, always visible):
+- Form heading: "Add schedule block"
+- Start date / End date
+- Start time / End time (optional — leave blank to block full day)
+- Reason: dropdown — Tournament | Maintenance | Private event | Holiday | Other
+- Notes: textarea
+- Course: Pradera Verde (pre-filled, single course MVP)
+- Submit button: "Add schedule block"
+
+On submit: instantly reflects in the golfer-facing tee time availability and the admin calendar.
+
+### Admin — Notifications (/admin/notifications)
+
+Page heading: "Notification Log"
+Sub: "All reservation status notifications sent to golfers. Mock delivery only for MVP."
+
+Filter row: Event type dropdown | Channel dropdown | Status dropdown | Date input
+
+Table:
+Columns: Reservation ID | Golfer | Event | Channel | Status | Timestamp
+Status tags: "Sent (mock)" in green text | "Queued" in amber | "Failed" in red
+No send controls — read-only log.
+
+Empty state: "No notifications yet. Notifications are logged when reservation statuses change."
+
+---
+
+## CONVEX MUTATIONS AND QUERIES
+
+Expose the following in Convex:
+
+Queries:
+- getAvailableSlots(date, courseId) → TeeTimeSlot[]
+- getReservation(id) → Reservation + related user + slot
+- getMyReservations(userId) → Reservation[]
+- getAllReservations(filters) → Reservation[] (admin)
+- getScheduleBlocks() → ScheduleBlock[]
+- getNotifications(reservationId?) → Notification[]
+- getCourse(id) → Course
+- getDashboardMetrics() → { pendingToday, approvedThisWeek, activeSlots, upcomingBlocks }
+
+Mutations:
+- submitReservation(formData) → reservationId
+- cancelReservation(id, userId) → void (golfer-initiated, checks ownership)
+- updateReservationStatus(id, status, adminNotes?, customerFacingNote?) → void (admin only)
+- confirmMockPayment(id, method) → void
+- createTeeTimeSlot(data) → slotId
+- updateTeeTimeSlot(id, updates) → void
+- disableTeeTimeSlot(id) → void
+- createScheduleBlock(data) → blockId
+- deleteScheduleBlock(id) → void
+- logNotification(reservationId, userId, event, channel) → void
+
+All admin mutations must check ctx.auth and verify user role = "admin" before executing. All golfer mutations must verify user ownership where applicable.
+
+---
+
+## GLOBAL BEHAVIORS
+
+- Convex real-time: reservation status changes on admin side must reflect immediately on golfer detail page (use useQuery live subscriptions)
+- All form submissions show a loading state on the button ("Submitting…") until Convex confirms
+- All Convex errors surface as inline error messages, never console-only
+- After any admin status action, re-fetch reservation and log a notification record automatically
+- Tee time slots with all spots taken (availableSpots = 0) must show as unavailable in the golfer booking grid even if status = available
+- Schedule blocks must exclude matching date/time slots from the golfer-facing slot query result
+
+---
+
+## WHAT NOT TO BUILD
+
+- No real Stripe, PayMaya, GCash, or bank integration
+- No real email or SMS delivery (log only)
+- No multi-course management across unrelated clubs
+- No package booking workflow
+- No native mobile app
+- No loyalty points, promo codes, or dynamic pricing
+- No complex RBAC beyond golfer vs admin
